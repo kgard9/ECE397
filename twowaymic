@@ -1,0 +1,82 @@
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+
+#define MIC_PIN A0  // MAX4466 Mic input
+#define CE_PIN 7
+#define CSN_PIN 8
+
+RF24 radio(CE_PIN, CSN_PIN);
+
+// Addresses for two-way communication
+const byte address1[6] = "00001"; 
+const byte address2[6] = "00002"; 
+
+#define FILTER_SIZE 4
+int filterBuffer[FILTER_SIZE] = {0};
+int filterIndex = 0;
+
+void setup() {
+  Serial.begin(115200);
+  radio.begin();
+  radio.setPALevel(RF24_PA_HIGH);
+  radio.setDataRate(RF24_1MBPS);
+  
+  // Open both reading and writing pipes
+  radio.openWritingPipe(address1);   // This Arduino writes to address1
+  radio.openReadingPipe(1, address2); // And reads from address2
+  
+  radio.startListening(); // Start in listening mode
+  Serial.println("Two-way device ready");
+}
+
+void loop() {
+  if (radio.available()) {
+    // If data is available, read it
+    uint8_t receivedPacket[16];
+    radio.read(&receivedPacket, sizeof(receivedPacket));
+    
+    Serial.print("Received: ");
+    for (int i = 0; i < 16; i++) {
+      Serial.print(receivedPacket[i]);
+      Serial.print(" ");
+    }
+    Serial.println();
+  }
+
+  // Capture a packet to send
+  uint8_t audioPacket[16];
+  for (int i = 0; i < 16; i++) {
+    int micValue = analogRead(MIC_PIN);
+    micValue = map(micValue, 0, 1023, 0, 255);
+
+    // Moving average filter
+    filterBuffer[filterIndex] = micValue;
+    filterIndex = (filterIndex + 1) % FILTER_SIZE;
+
+    int filteredValue = 0;
+    for (int j = 0; j < FILTER_SIZE; j++) {
+      filteredValue += filterBuffer[j];
+    }
+    filteredValue /= FILTER_SIZE;
+
+    audioPacket[i] = filteredValue;
+
+    delayMicroseconds(125); // 8kHz sampling
+  }
+
+  // Switch to transmit mode
+  radio.stopListening();
+  bool success = radio.write(&audioPacket, sizeof(audioPacket));
+
+  if (success) {
+    Serial.println("Packet sent successfully");
+  } else {
+    Serial.println("Packet send failed");
+  }
+
+  // Switch back to listening
+  radio.startListening();
+
+  delay(5); // small delay to avoid spamming
+}
